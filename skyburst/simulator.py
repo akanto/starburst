@@ -44,6 +44,9 @@ DEFAULT_SIMULATOR_SPEC = {
     # If the job exceeds long_job_thres time on the cloud, it is moved back to the onprem.
     # The waiting time for onprem is now 2 * (waiting time) (for long jobs).
     'preempt_cloud_ratio': -1,
+    # Optional callable (job, queue) -> deadline. Overrides 'waiting_policy' and lets a waiting policy see the
+    # queue at the job's arrival (added for the P4 robustness check; 'waiting_policy' stays the label).
+    'waiting_fn': None,
     # (Deprecated) Algorithm to immediately send job to cloud (without waiting).
     'filter_alg': None,
     # Prints out simulator state at every timestep.
@@ -98,6 +101,8 @@ def run_simulator(
     waiting_fn = waiting_policy.lookup_linear_function(
         simulator_spec['waiting_policy'],
         waiting_factor=simulator_spec['waiting_factor'])
+    if simulator_spec['waiting_fn'] is not None:
+        waiting_fn = lambda job: simulator_spec['waiting_fn'](job, queue)
     binpack_alg = simulator_spec['binpack_alg']
     backfill = simulator_spec['backfill']
     loop = simulator_spec['loop']
