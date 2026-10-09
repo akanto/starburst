@@ -28,6 +28,23 @@ class Cluster(object):
         self.backfill = backfill
         # Defines the bin packing algorithm, `first-fit`, `best-fit`.
         self.binpack = binpack
+        # Nodes that accept new jobs. A node taken offline keeps its running jobs until they finish (it drains).
+        self.online = [True] * num_nodes
+
+    def set_online_nodes(self, num_online):
+        """Changes the capacity: `num_online` nodes accept new jobs. Nodes taken offline are the ones with the most
+        free GPUs (ties: the highest index); nodes brought online are the offline ones with the lowest index."""
+        if num_online > self.num_nodes:
+            raise ValueError(f'{num_online} online nodes, but the cluster has {self.num_nodes}.')
+        online = [i for i in range(self.num_nodes) if self.online[i]]
+        offline = [i for i in range(self.num_nodes) if not self.online[i]]
+        if num_online > len(online):
+            for i in offline[:num_online - len(online)]:
+                self.online[i] = True
+        elif num_online < len(online):
+            online.sort(key=lambda i: (self.nodes[i].free_gpus, i), reverse=True)
+            for i in online[:len(online) - num_online]:
+                self.online[i] = False
 
     def is_full(self):
         return all([n.free_gpus == 0 for n in self.nodes])
@@ -42,8 +59,8 @@ class Cluster(object):
         num_cpus = job.resources['CPUs']
         num_cpus_per_node = num_cpus / job.nodes
 
-        free_gpus = [n.free_gpus for n in self.nodes]
-        free_cpus = [n.free_cpus for n in self.nodes]
+        free_gpus = [n.free_gpus for i, n in enumerate(self.nodes) if self.online[i]]
+        free_cpus = [n.free_cpus for i, n in enumerate(self.nodes) if self.online[i]]
         # Quick check, no hope of fitting onto cluster :(
         if num_gpus > sum(free_gpus) or num_cpus > sum(free_cpus):
             return False, []
@@ -92,7 +109,7 @@ class Cluster(object):
         node_free_gpu_count = [len(g) for g in node_free_gpu_list]
 
         node_free_count = [(i, node_free_gpu_count[i], node_free_cpu_count[i])
-                           for i in range(len(node_free_gpu_count))]
+                           for i in range(len(node_free_gpu_count)) if self.online[i]]
         if self.binpack == 'first-fit':
             pass
         elif self.binpack == 'best-fit':

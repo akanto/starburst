@@ -47,6 +47,10 @@ DEFAULT_SIMULATOR_SPEC = {
     # Optional callable (job, queue) -> deadline. Overrides 'waiting_policy' and lets a waiting policy see the
     # queue at the job's arrival (added for the P4 robustness check; 'waiting_policy' stays the label).
     'waiting_fn': None,
+    # Optional capacity that changes over time: a list of (time, number of nodes that accept new jobs), sorted by
+    # time; 'cluster_size' must be at least the largest number. A node taken offline drains: its running jobs finish.
+    # Added for the P4 evaluation, to replay the per-day capacity of a trace's teams.
+    'capacity_schedule': None,
     # (Deprecated) Algorithm to immediately send job to cloud (without waiting).
     'filter_alg': None,
     # Prints out simulator state at every timestep.
@@ -135,6 +139,7 @@ def run_simulator(
                       num_cpus_per_node=simulator_spec['cpus_per_node'],
                       backfill=backfill,
                       binpack=binpack_alg)
+    capacity_schedule = list(simulator_spec['capacity_schedule'] or [])
     t = 0
     pbar = tqdm(total=len(jobs),
                 desc="Jobs progress: ",
@@ -144,6 +149,9 @@ def run_simulator(
     total_cloud_jobs = 0
     # Simulation Loop - Continues until all jobs have passed and the queue is empty and the cluster has no more jobs.
     while len(jobs) > 0 or len(queue) > 0 or cluster.active_jobs:
+        # Apply every capacity change that is due.
+        while capacity_schedule and capacity_schedule[0][0] <= t:
+            cluster.set_online_nodes(capacity_schedule.pop(0)[1])
         # Clear cluster of jobs that have completed
         completed_jobs = cluster.try_clear(t)
         finished_jobs.extend(completed_jobs)
@@ -342,6 +350,10 @@ def run_simulator(
             for q in queue:
                 # append time outs
                 next_time_list.append(q.deadline - q.runtime)
+
+        # Case 4: the next capacity change, while jobs are still waiting or running
+        if capacity_schedule and next_time_list:
+            next_time_list.append(capacity_schedule[0][0])
 
         # If there are no jobs left in the cluster and in the job and queue, terminate simulation.
         if len(next_time_list) == 0:
