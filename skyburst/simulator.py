@@ -7,6 +7,9 @@ from tqdm import tqdm
 
 from skyburst import Cluster, Job, utils, waiting_policy
 
+# A refused leave (see 'leave_fn') keeps the job waiting for this long, far beyond any trace (seconds or hours).
+NO_DEADLINE = 1e13
+
 DEFAULT_SIMULATOR_SPEC = {
     # Size of the cluster (i.e. # of cluster nodes).
     'cluster_size': 64,
@@ -51,6 +54,10 @@ DEFAULT_SIMULATOR_SPEC = {
     # time; 'cluster_size' must be at least the largest number. A node taken offline drains: its running jobs finish.
     # Added for the P4 evaluation, to replay the per-day capacity of a trace's teams.
     'capacity_schedule': None,
+    # Optional callable (job, time) -> bool, called when a waiting job reaches its deadline and would leave for the
+    # cloud. False keeps the job in the queue without a deadline: it waits for a local GPU (for example, because a
+    # spend limit is reached). Added for the P4 evaluation of a monthly spend cap.
+    'leave_fn': None,
     # (Deprecated) Algorithm to immediately send job to cloud (without waiting).
     'filter_alg': None,
     # Prints out simulator state at every timestep.
@@ -107,6 +114,7 @@ def run_simulator(
         waiting_factor=simulator_spec['waiting_factor'])
     if simulator_spec['waiting_fn'] is not None:
         waiting_fn = lambda job: simulator_spec['waiting_fn'](job, queue)
+    leave_fn = simulator_spec['leave_fn']
     binpack_alg = simulator_spec['binpack_alg']
     backfill = simulator_spec['backfill']
     loop = simulator_spec['loop']
@@ -165,6 +173,11 @@ def run_simulator(
                 raise ValueError(
                     f'Job {job.idx} has timed out: {t} > {job.deadline}')
             elif t == job.deadline - job.runtime:
+                if leave_fn is not None and not leave_fn(job, t):
+                    # The leave was refused: the job stays in the queue and waits for a local GPU, without a deadline.
+                    job.set_deadline(deadline=job.arrival + NO_DEADLINE + job.runtime)
+                    i += 1
+                    continue
                 queue.remove(job)
                 job.state = 'TIMEOUT-CLOUD'
                 # Shortcut: Job can predict it will go to cloud or not, if so, it would have began running at job.arrival.
